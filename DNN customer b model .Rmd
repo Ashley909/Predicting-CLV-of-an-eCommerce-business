@@ -1,0 +1,366 @@
+---
+title: "customer b model"
+author: "B614677"
+date: "06/09/2021"
+output: html_document
+---
+
+```{r}
+# Loading libraries
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(here)
+```
+
+```{r}
+# Keras set up 
+#install.packages("keras")
+library(keras)
+# optional
+#install_keras()
+```
+
+```{r}
+# Tensorflow set up
+#install.packages("tensorflow")
+library("tensorflow")
+#optional
+#install_tensorflow()
+```
+
+
+```{r}
+#Read the data 
+customers_b = read.csv(here("data", "customer_group_b4.csv"))
+head(customers_b)
+dim(customers_b)
+```
+
+```{r}
+#Fixing the date 
+customers_b = customers_b %>%
+  mutate(InvoiceDate = as.Date(as.POSIXct(InvoiceDate,
+                                          format = "%Y-%m-%d %H:%M:%S")))
+```
+
+```{r}
+#Get Recency, First purchase and last purchase made by customers
+threshold_date_b = unique(customers_b$InvoiceDate)[round(length(unique(customers_b$InvoiceDate)) * 0.5)]
+```
+
+
+```{r}
+#Get Recency, First purchase and last purchase made by customers
+max_InvoiceDate_b = max(customers_b$InvoiceDate)
+# today = max_InvoiceDate_b+2
+customers_b = customers_b %>% group_by(Customer_ID) %>% 
+  mutate(Recency =  max_InvoiceDate_b-max(InvoiceDate),
+         First_purchase = max_InvoiceDate_b - min(InvoiceDate) ,
+         Value = Quantity*Price, Frequency = n_distinct(Invoice)) %>%arrange(InvoiceDate)
+
+
+```
+
+```{r}
+# 3. Get customers with repeat transactions
+customers_b = customers_b %>% group_by(Customer_ID) %>% mutate(repeat_customers = ifelse(n_distinct(Invoice)>1,n_distinct(Invoice),0)) 
+```
+
+
+```{r}
+#
+cal_b = customers_b %>%  filter(InvoiceDate <= threshold_date_b) %>% group_by(Customer_ID) %>% 
+  mutate(Recency = as.numeric(threshold_date_b-max(InvoiceDate)),First_purchase = as.numeric(threshold_date_b - min(InvoiceDate)) , 
+         Last_purchase =as.numeric(threshold_date_b - max(InvoiceDate)),            
+         time_between = as.numeric(round(mean(diff(InvoiceDate)))), first_last = abs(Last_purchase-First_purchase),
+         Value = Quantity*Price, Frequency = n_distinct(Invoice),
+         repeat_customers = ifelse(n_distinct(Invoice)>1,n_distinct(Invoice),0))  %>% ungroup()%>%
+  group_by(Customer_ID,Invoice) %>% mutate(mean_val = mean(Value)) %>% ungroup()%>%arrange(InvoiceDate)
+```
+
+```{r}
+#
+cal_b = cal_b %>% mutate(time_between = ifelse(is.na(time_between),
+                                           0, time_between))
+```
+
+```{r}
+#
+unique(cal_b$Frequency)
+unique(cal_b$repeat_customers)
+
+unique(cal_b$Recency)
+
+check_b = cal_b %>% filter(is.na(time_between))
+```
+
+```{r}
+# Setting up the training data
+train_data_b = cal_b %>% select(Quantity,Customer_ID,Country,Recency,
+                                First_purchase,
+                                Last_purchase,time_between,
+                                Frequency,first_last,repeat_customers) 
+str(train_data_b)
+```
+```{r}
+#train_data_b
+```
+
+
+```{r}
+#
+library(caret)
+dmy_b = dummyVars("~Country", data = train_data_b)
+trsf_b <- data.frame(predict(dmy_b, newdata = train_data_b))
+```
+
+```{r}
+#
+train_data_b2 = cbind(train_data_b%>% select(-Country), trsf_b) 
+```
+
+```{r}
+#
+mean_b <- apply(train_data_b2, 2, mean)
+std_b <- apply(train_data_b2, 2, sd)
+train_data_b2 <- scale(train_data_b2, center = mean_b, scale = std_b)
+# test_data_b <- scal_be(test_data_b, center = mean, scal_be = std)
+```
+
+```{r}
+#
+# train_data_b2 = as.matrix(train_data_b2)
+target_b = cal_b$Value
+```
+
+```{r}
+ k_b <- 3
+ indices_b <- sample(1:nrow(train_data_b2))
+ folds_b <- cut(1:length(indices_b), breaks = k_b, labels = FALSE) 
+ num_epochs_b <- 50 # 100  
+ all_scores_b <- c()
+```
+
+
+
+```{r}
+# DNN layer set up 
+
+model_cam_b = keras_model_sequential() 
+input_b <-  layer_input(shape = ncol(train_data_b2))
+preds_b <-  input_b %>%
+  layer_dense(units = 64,activation = 'relu')%>%
+  layer_dense(units = 64,activation = 'relu')%>%
+  layer_dense(units = 32,activation = 'relu')%>% 
+  layer_dense(units = 16,activation = 'relu') %>%
+  layer_dense(units= 1, activation = 'relu')
+```
+
+
+```{r}
+#
+model_cam_b = keras_model(input_b,preds_b) %>% compile(
+  loss = 'mse',
+  optimizer = optimizer_adam(lr =  0.05,decay = 0.7), 
+  metrics = list('mae')
+)
+
+```
+
+```{r}
+#
+early_stopping_b <- callback_early_stopping(patience = 10)
+```
+
+```{r}
+#
+set.seed(1246)
+```
+
+```{r}
+# saving
+checkpoint <- callback_model_checkpoint(
+  filepath = "model.hdf5",
+  save_best_only = TRUE,
+  period = 1,
+  verbose = 1
+)
+```
+
+```{r}
+# Producing a loss and val_loss graphs (takes ages to compile)
+history_b <- model_cam_b %>% fit(
+  train_data_b2,
+  target_b,
+  epochs = 20,
+  validation_split = 0.2, 
+  batch_size =  5,
+  verbose = 1,
+  
+  callbacks = list(checkpoint, early_stopping_b)
+)
+```
+
+```{r}
+# Saving the above model (This has been commented out)
+
+# save_model_hdf5()
+# save(model_cam_b,file="model.RDA")
+# mod2=load("model.hdf5")
+# loss <- evaluate(model_cam_b, x = x_test, y = x_test)
+# loss
+```
+
+
+```{r}
+## --------------------------------------------------------------------------
+pred_train_b <- data.frame(predict(model_cam_b, train_data_b2))
+mse_train_b <- sum((target_b-pred_train_b)^2)
+```
+
+```{r}
+#
+training_data_b = cbind(train_data_b,pred_train_b,target_b)
+training_data_b$InvoiceDate = as.Date(cal_b$InvoiceDate)
+str(training_data_b)
+```
+
+
+```{r}
+#
+ggplot(data = training_data_b,aes(x=InvoiceDate,
+                                y=target_b))+geom_line()+geom_line(aes(y = pred_train_b$predict.model_cam_b..train_data_b2.), color = "red")+ylim(0,50)
+```
+
+```{r}
+# test data being constructed
+library(dplyr)
+holdout_b = customers_b %>%  filter(InvoiceDate > threshold_date_b) %>% group_by(Customer_ID) %>% 
+  mutate(Recency = as.numeric(max_InvoiceDate_b-max(InvoiceDate)), First_purchase = as.numeric(max_InvoiceDate_b - min(InvoiceDate)) , 
+         Last_purchase =as.numeric(max_InvoiceDate_b - max(InvoiceDate)),            
+         time_between = as.numeric(round(mean(diff(InvoiceDate)))), first_last = abs(Last_purchase-First_purchase),
+         Value = Quantity*Price, Frequency = n_distinct(Invoice),
+         repeat_customers = ifelse(n_distinct(Invoice) > 1, n_distinct(Invoice), 0))  %>% ungroup()%>%
+  group_by(Customer_ID,Invoice) %>% mutate(mean_val = mean(Value)) %>% ungroup()%>%arrange(InvoiceDate)
+```
+
+
+```{r}
+#
+holdout_b = holdout_b %>% mutate(time_between = ifelse(is.na(time_between),0 , time_between))
+```
+
+```{r}
+#
+library(keras)
+test_data_b = holdout_b %>% select(Quantity, Customer_ID, Country, Recency,
+                               First_purchase, Last_purchase, time_between, Frequency,
+                               first_last, repeat_customers) 
+str(test_data_b)
+```
+
+
+```{r}
+#
+library(caret)
+
+test_country_b <- data.frame(predict(dmy_b, newdata = test_data_b))
+missing_b <- setdiff(colnames(trsf_b), colnames(test_country_b))
+test_country_b = data.frame(test_country_b)
+test_country_b[missing_b] <- 0
+test_country_b= test_country_b[ , order(names(test_country_b))]
+# TAKE A LOOK AT THIS LINE OF CODE THE RSA DOESN'T LOOK RIGHT, TEST WITH IT COMMENTED OUT,
+# OR CHANGE THE TEST COUNTRY --------------------
+#test_country_b$CountryRSA = NULL ####
+```
+
+
+```{r}
+# 
+test_data_b2 = cbind(test_data_b%>% select(-Country), test_country_b) 
+nrow(test_data_b2)
+```
+
+```{r}
+#
+test_data_b2 <- scale(test_data_b2, center = mean_b, scale = std_b)
+test_data_b2[is.na(test_data_b2)] <- 0 
+```
+
+```{r}
+#
+pred_test_b <- data.frame(predict(model_cam_b, test_data_b2))
+mse_test <- sum((holdout_b$Value-pred_test_b)^2)
+```
+
+```{r}
+#
+test_data_b = cbind(holdout_b,pred_test_b)
+```
+
+
+```{r}
+#
+ggplot(data = training_data_b,aes(x=InvoiceDate,y=target_b))+geom_line()+geom_line(aes(y=pred_train_b$predict.model_cam_b..train_data_b2.),color="red") + ylim(0,50)
+
+```
+
+
+```{r}
+#
+ggplot(data = test_data_b,aes(x=InvoiceDate,y=Value,group=(InvoiceDate)))+geom_line()+geom_line(aes(y=pred_test_b$predict.model_cam_b..test_data_b2.),color="red")+ylim(0,20)+geom_smooth()
+
+```
+
+
+```{r}
+#
+plot_data_b = test_data_b %>% group_by(InvoiceDate) %>% mutate(actual_sale = mean(Value),pred_sale = ifelse((10 + predict.model_cam_b..test_data_b2.) > 60, quantile((10 + predict.model_cam_b..test_data_b2.),p = 0.80), (10 + predict.model_cam_b..test_data_b2.)))
+
+write.csv(plot_data_b,"test_results_b.csv")
+ggplot(data = plot_data_b,
+       aes(x = InvoiceDate,y = actual_sale)) + geom_line()+geom_line(aes(y = pred_sale), color = "red") + ylim(0, 100)
+```
+
+
+```{r, fig.width=11, fig.align='center'}
+# From the Study Notebook: (first Graph, To include demographics and seasonality, only 6 months of data)
+
+holdout_b_nn = read.csv(here("test_results_b.csv"))
+holdout_b_nn = holdout_b_nn %>% mutate(InvoiceDate = as.Date(InvoiceDate))
+ggplot(data = holdout_b_nn, aes(x = InvoiceDate, y = actual_sale)) + geom_line() + geom_line(aes(y = pred_sale), color = "red")+ ylim(0, 100) +
+  theme(panel.background = element_blank(),
+        text = element_text(size = 14),
+        axis.line = element_line(colour = "black", linetype = "solid"),
+        axis.text.y = element_text( colour = "black"),
+        axis.text.x = element_text( colour = "black")) +
+  labs( y = "Actual Sales (Thousands)",
+        x = "Invoice Date",
+        title = "Actual and predicted number of \n individual customer sales per day") 
+```
+
+```{r}
+# From the Study Notebook: (Second Graph, The mean captures the ups and downs, , only 6 months of data)
+
+#detach(package:plyr)
+library(ggplot2)
+library(dplyr)
+holdout_b_nn2 = holdout_b_nn %>% group_by(InvoiceDate) %>% summarize(pred_sale = mean(pred_sale), actual_sale = mean(actual_sale))
+ggplot(data = holdout_b_nn2, aes(x = InvoiceDate,y = pred_sale)) + geom_line(color = "blue") + geom_line(aes(y = actual_sale)) + ylim(0, 100) + theme(panel.background = element_blank(), text = element_text(size = 14),
+        axis.line = element_line(colour = "black", linetype = "solid"),
+        axis.text.y = element_text( colour = "black"),
+        axis.text.x = element_text( colour = "black")) + 
+  labs( y = "Actual Sales (Thousands)",
+        x = "Invoice Date",
+        title = " meaned version of first graph") 
+```
+
+
+
+
+
+
+
+
+
